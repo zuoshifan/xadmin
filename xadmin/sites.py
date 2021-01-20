@@ -80,6 +80,14 @@ class AdminSite(object):
     def register_view(self, path, admin_view_class, name):
         self._registry_views.append((path, admin_view_class, name))
 
+    def view_is_registered(self, view):
+        registered_views = [ vw for (_, vw, _) in self._registry_views ]
+        return view in registered_views
+
+    def modelview_is_registered(self, view):
+        registered_modelviews = [ vw for (_, vw, _) in self._registry_modelviews ]
+        return view in registered_modelviews
+
     def register_plugin(self, plugin_class, admin_view_class):
         from xadmin.views.base import BaseAdminPlugin
         if issubclass(plugin_class, BaseAdminPlugin):
@@ -287,6 +295,43 @@ class AdminSite(object):
 
     def create_model_admin_view(self, admin_view_class, model, option_class):
         return self.get_view_class(admin_view_class, option_class).as_view()
+
+    def get_url(self, _path, model_or_view, name):
+
+        from django.urls import include, path, re_path
+        from xadmin.views.base import BaseAdminView
+
+        def wrap(view, cacheable=False):
+            def wrapper(*args, **kwargs):
+                return self.admin_view(view, cacheable)(*args, **kwargs)
+            wrapper.admin_site = self
+            return update_wrapper(wrapper, view)
+
+        if isinstance(model_or_view, tuple):
+            model, view = model_or_view
+            admin_class = self._registry[model]
+            return re_path(
+                    _path,
+                    wrap(self.create_model_admin_view(view, model, admin_class)),
+                    name=name)
+        elif self.view_is_registered(model_or_view):# or self.modelview_is_registered(model_or_view):
+            view = model_or_view
+            return re_path(_path,
+                           wrap(self.create_admin_view(view))
+                           if inspect.isclass(view) and issubclass(view, BaseAdminView) else include(view(self)),
+                           name=name)
+        elif model_or_view in self._registry.keys():
+            model = model_or_view
+            admin_class = self._registry[model]
+            view_urls = [
+                re_path(
+                    _path,
+                    wrap(self.create_model_admin_view(clz, model, admin_class)),
+                    name=name % (model._meta.app_label, model._meta.model_name)
+                )
+                for _path, clz, name in self._registry_modelviews
+            ]
+            return re_path(r'', include(view_urls))
 
     def get_urls(self):
         from django.urls import include, path, re_path
